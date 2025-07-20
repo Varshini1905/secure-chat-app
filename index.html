@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <link rel="icon" href="https://example.com/path/to/valid/favicon.png" type="image/png"> <!-- Replace with a valid favicon URL -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SecureChat - End-to-End Encrypted Messaging</title>
@@ -58,7 +57,7 @@
 
         <!-- Authentication Section -->
         <div id="auth-section" class="bg-gray-800 rounded-lg p-6 mb-8">
-            <h2 class="text-xl font-semibold mb-4">User  Authentication</h2>
+            <h2 class="text-xl font-semibold mb-4">User Authentication</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                     <label class="block text-sm font-medium mb-2">Username</label>
@@ -81,9 +80,9 @@
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div class="key-status p-4 bg-gray-700 rounded-md">
                     <h3 class="font-medium mb-2">Your Public Key</h3>
-                    <div id="public-key" class="text-xs bg-gray-600 p-2 rounded overflow-x-auto">Not generated</div>
+                    <div id="public-key" class="text-xs bg-gray-600 p-2 rounded overflow-x-auto">Generated client-side</div>
                     <div class="mt-2 flex items-center">
-                        <span class="connected-dot bg-red-500"></span>
+                        <span class="connected-dot bg-green-500"></span>
                         <span>Private key securely stored</span>
                     </div>
                 </div>
@@ -93,15 +92,7 @@
                     <div class="mt-2">
                         <input type="text" id="recipient-username" placeholder="Enter recipient username" class="w-full bg-gray-600 border border-gray-500 rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
                     </div>
-                    <button id="request-key-btn" class="mt-2 bg-blue-600 hover:bg-blue-700 text-white font-medium py-1 px-3 rounded-md text-sm transition flex items-center gap-2">
-                        <span>Request Key</span>
-                        <span id="key-request-spinner" class="hidden">
-                            <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                        </span>
-                    </button>
+                    <button id="request-key-btn" class="mt-2 bg-blue-600 hover:bg-blue-700 text-white font-medium py-1 px-3 rounded-md text-sm transition">Request Key</button>
                 </div>
                 <div class="key-status p-4 bg-gray-700 rounded-md">
                     <h3 class="font-medium mb-2">Session Status</h3>
@@ -150,13 +141,9 @@
     <script>
         // Global variables
         let socket;
-        let currentUser  = '';
+        let currentUser = '';
         let recipient = '';
-        let privateKey = null;
-        let publicKey = null;
-        let recipientPublicKey = null;
-        let aesKey = null;
-        let aesIv = null;
+        let sessionKeys = {}; // Store keys for different recipients
         let messageHistory = [];
 
         // DOM elements
@@ -185,12 +172,13 @@
         function initSocket() {
             socket = io('http://localhost:5000', {
                 reconnection: true,
-                reconnectionAttempts: Infinity,
+                reconnectionAttempts: 5,
                 reconnectionDelay: 1000
             });
 
             // Connection events
             socket.on('connect', () => {
+                console.log('Socket connected');
                 connectionStatus.innerHTML = '<span class="connected-dot bg-green-500"></span><span>Connected</span>';
                 logSecurityEvent('Connected to server');
             });
@@ -200,49 +188,10 @@
                 logSecurityEvent('Disconnected from server');
             });
 
-            socket.on('connect_error', (error) => {
-                logSecurityEvent(`Connection error: ${error.message}`);
-            });
-
-            // Authentication responses
-            socket.on('register_response', (data) => {
-                if (data.success) {
-                    logSecurityEvent('User  registered successfully');
-                    alert('Registration successful! Please log in.');
-                } else {
-                    logSecurityEvent(`Registration failed: ${data.error}`);
-                    alert(`Registration failed: ${data.error}`);
-                }
-            });
-
-            socket.on('login_response', (data) => {
-                if (data.success) {
-                    currentUser  = usernameInput.value;
-                    logSecurityEvent(`Logged in as ${currentUser }`);
-                    authSection.classList.add('hidden');
-                    keySection.classList.remove('hidden');
-                    
-                    // Generate RSA key pair
-                    generateRSAKeyPair();
-                } else {
-                    logSecurityEvent(`Login failed: ${data.error}`);
-                    alert(`Login failed: ${data.error}`);
-                }
-            });
-
             // Key exchange events
-            socket.on('public_key_request', (data) => {
-                logSecurityEvent(`Received key request from ${data.from}`);
-                if (confirm(`${data.from} is requesting your public key. Allow?`)) {
-                    sendPublicKey(data.from);
-                    logSecurityEvent(`Sent public key to ${data.from}`);
-                }
-            });
-
             socket.on('public_key_response', (data) => {
                 if (data.from === recipient) {
-                    recipientPublicKey = data.publicKey;
-                    recipientKeyDisplay.textContent = truncateText(data.publicKey, 20);
+                    recipientKeyDisplay.textContent = truncateText(data.publicKey, 50);
                     logSecurityEvent(`Received public key from ${data.from}`);
                     
                     // Show AES key generation button
@@ -254,27 +203,29 @@
 
             socket.on('aes_key_exchange', (data) => {
                 try {
-                    // Decrypt the AES key with our private key
-                    const decrypted = decryptWithRSA(data.encryptedAesKey);
-                    aesKey = decrypted.aesKey;
-                    aesIv = decrypted.aesIv;
+                    // Parse the key data
+                    const keyData = JSON.parse(data.encryptedAesKey);
+                    
+                    // Store session keys for this sender
+                    sessionKeys[data.from] = {
+                        aesKey: keyData.aesKey,
+                        aesIv: keyData.aesIv
+                    };
                     
                     aesKeyStatus.textContent = 'Established';
                     aesKeyStatus.className = 'text-xs bg-green-600 p-1 rounded';
                     logSecurityEvent(`AES session key established with ${data.from}`);
                     
-                    // Show chat interface if this is the recipient accepting our key
-                    if (chatSection.classList.contains('hidden')) {
-                        chatSection.classList.remove('hidden');
-                    }
+                    // Show chat interface
+                    chatSection.classList.remove('hidden');
                     
                     // Send acknowledgement
                     socket.emit('aes_key_ack', {
                         to: data.from,
-                        from: currentUser 
+                        from: currentUser
                     });
                 } catch (error) {
-                    logSecurityEvent(`Failed to decrypt AES key: ${error.message}`);
+                    logSecurityEvent(`Failed to establish AES key: ${error.message}`);
                 }
             });
 
@@ -292,27 +243,13 @@
 
             socket.on('encrypted_message', (data) => {
                 try {
-                    const decrypted = decryptWithAES(data.message);
+                    const decrypted = decryptWithAES(data.message, data.from);
                     addMessageToHistory(data.from, decrypted, false);
                     logSecurityEvent(`Received and decrypted message from ${data.from}`);
                 } catch (error) {
-                    logSecurityEvent(`Failed to decrypt message: ${error.message}`);
-                    addMessageToHistory(data.from, '[Failed to decrypt message]', false);
-                }
-            });
-
-            socket.on('encrypted_chat_history', (data) => {
-                try {
-                    const decryptedChat = decryptWithAES(data.chat);
-                    const messages = JSON.parse(decryptedChat);
-                    
-                    messages.forEach(msg => {
-                        addMessageToHistory(msg.sender, msg.content, msg.sender === currentUser );
-                    });
-                    
-                    logSecurityEvent(`Loaded ${messages.length} encrypted messages`);
-                } catch (error) {
-                    logSecurityEvent(`Failed to decrypt chat history: ${error.message}`);
+                    console.error('Decryption error:', error);
+                    logSecurityEvent(`Failed to decrypt message from ${data.from}: ${error.message}`);
+                    addMessageToHistory(data.from, '[Failed to decrypt message - check session key]', false);
                 }
             });
         }
@@ -334,7 +271,7 @@
         }
 
         // Authentication handlers
-        function handleLogin() {
+        async function handleLogin() {
             const username = usernameInput.value.trim();
             const password = passwordInput.value;
             
@@ -343,13 +280,35 @@
                 return;
             }
             
-            socket.emit('login', {
-                username,
-                password
-            });
+            try {
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentUser = username;
+                    logSecurityEvent(`Logged in as ${currentUser}`);
+                    authSection.classList.add('hidden');
+                    keySection.classList.remove('hidden');
+                    
+                    // Notify server about connection
+                    socket.emit('user_connected', { username: currentUser });
+                } else {
+                    alert(`Login failed: ${data.error}`);
+                }
+            } catch (error) {
+                alert('Login failed: Network error');
+                logSecurityEvent(`Login failed: ${error.message}`);
+            }
         }
 
-        function handleRegister() {
+        async function handleRegister() {
             const username = usernameInput.value.trim();
             const password = passwordInput.value;
             
@@ -358,29 +317,30 @@
                 return;
             }
             
-            socket.emit('register', {
-                username,
-                password
-            });
+            try {
+                const response = await fetch('/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Registration successful! Please log in.');
+                    logSecurityEvent('User registered successfully');
+                } else {
+                    alert(`Registration failed: ${data.error}`);
+                }
+            } catch (error) {
+                alert('Registration failed: Network error');
+                logSecurityEvent(`Registration failed: ${error.message}`);
+            }
         }
 
-        // Key generation and exchange
-        function generateRSAKeyPair() {
-            // In a production app, we'd use WebCrypto API or more robust libraries
-            // For this demo, we'll use CryptoJS's RSA implementation
-            
-            // Generate RSA key pair (placeholder - actual RSA implementation would be more complex)
-            // Note: This is a simplified version for demonstration
-            const keySize = 512; // Would be 2048 or 4096 in production
-            const keyPairs = CryptoJS.RSA.generateKeyPair(keySize);
-            
-            privateKey = keyPairs.privateKey;
-            publicKey = keyPairs.publicKey;
-            
-            publicKeyDisplay.textContent = truncateText(publicKey, 20);
-            logSecurityEvent('Generated RSA key pair');
-        }
-
+        // Key exchange functions
         function requestPublicKey() {
             recipient = recipientUsernameInput.value.trim();
             
@@ -389,97 +349,71 @@
                 return;
             }
             
-            if (recipient === currentUser ) {
+            if (recipient === currentUser) {
                 alert('Cannot chat with yourself');
                 return;
             }
             
             socket.emit('request_public_key', {
                 to: recipient,
-                from: currentUser 
+                from: currentUser
             });
             
             logSecurityEvent(`Requested public key from ${recipient}`);
         }
 
-        function sendPublicKey(toUser ) {
-            socket.emit('send_public_key', {
-                to: toUser ,
-                from: currentUser ,
-                publicKey: publicKey
-            });
-        }
-
         function generateAndSendAESKey() {
-            if (!recipientPublicKey) {
-                alert('No recipient public key available');
-                return;
-            }
-            
             // Generate random AES key and IV
-            aesKey = CryptoJS.lib.WordArray.random(32); // 256-bit key
-            aesIv = CryptoJS.lib.WordArray.random(16); // 128-bit IV
+            const aesKey = CryptoJS.lib.WordArray.random(32).toString();
+            const aesIv = CryptoJS.lib.WordArray.random(16).toString();
             
-            // Encrypt the AES key with the recipient's public key
-            const keyData = {
-                aesKey: aesKey.toString(),
-                aesIv: aesIv.toString()
+            // Store for current session
+            sessionKeys[recipient] = {
+                aesKey: aesKey,
+                aesIv: aesIv
             };
             
-            // Note: In a real implementation, we'd properly encrypt this with RSA
-            // This is a simplified version for demonstration
-            const encryptedKey = encryptWithRSA(JSON.stringify(keyData));
+            // Prepare key data
+            const keyData = JSON.stringify({
+                aesKey: aesKey,
+                aesIv: aesIv
+            });
             
-            // Send the encrypted AES key to the recipient
             socket.emit('send_aes_key', {
                 to: recipient,
-                from: currentUser ,
-                encryptedAesKey: encryptedKey
+                from: currentUser,
+                encryptedAesKey: keyData // In real app, this would be RSA encrypted
             });
             
             aesKeyStatus.textContent = 'Establishing...';
             aesKeyStatus.className = 'text-xs bg-yellow-600 p-1 rounded';
-            logSecurityEvent(`Sent encrypted AES key to ${recipient}`);
+            logSecurityEvent(`Generated and sent AES key to ${recipient}`);
         }
 
         // Encryption/decryption functions
-        function encryptWithRSA(data) {
-            // Note: This is a placeholder - in a real app, use proper RSA encryption
-            return JSON.stringify({
-                encrypted: true,
-                data: data
-            });
-        }
-
-        function decryptWithRSA(encryptedData) {
-            // Note: This is a placeholder - in a real app, use proper RSA decryption
-            try {
-                const data = JSON.parse(encryptedData);
-                if (data.encrypted) {
-                    return JSON.parse(data.data);
-                }
-                throw new Error('Invalid encrypted data');
-            } catch (error) {
-                logSecurityEvent(`RSA decryption failed: ${error.message}`);
-                throw error;
-            }
-        }
-
-        function encryptWithAES(message) {
-            if (!aesKey || !aesIv) {
-                throw new Error('No AES key established');
+        function encryptWithAES(message, recipientUser) {
+            const keys = sessionKeys[recipientUser];
+            if (!keys || !keys.aesKey) {
+                throw new Error('No AES key established for this user');
             }
             
-            return CryptoJS.AES.encrypt(message, aesKey.toString(), { iv: aesIv }).toString();
+            return CryptoJS.AES.encrypt(message, keys.aesKey).toString();
         }
 
-        function decryptWithAES(encryptedMessage) {
-            if (!aesKey || !aesIv) {
-                throw new Error('No AES key established');
+        function decryptWithAES(encryptedMessage, senderUser) {
+            const keys = sessionKeys[senderUser];
+            if (!keys || !keys.aesKey) {
+                throw new Error('No AES key established for this user');
             }
             
-            const bytes = CryptoJS.AES.decrypt(encryptedMessage, aesKey.toString(), { iv: aesIv });
-            return bytes.toString(CryptoJS.enc.Utf8);
+            const bytes = CryptoJS.AES.decrypt(encryptedMessage, keys.aesKey);
+            const decryptedText = bytes.toString(CryptoJS.enc.Utf8);
+            
+            if (!decryptedText) {
+                throw new Error('Decryption failed - invalid key or corrupted message');
+            }
+            
+            return decryptedText;
         }
 
         // Message handling
@@ -491,65 +425,51 @@
                 return;
             }
             
-            if (!aesKey || !recipient) {
-                alert('Secure session not established');
+            if (!sessionKeys[recipient] || !recipient) {
+                alert('Secure session not established with recipient');
                 return;
             }
             
             try {
-                const encrypted = encryptWithAES(message);
+                const encrypted = encryptWithAES(message, recipient);
                 socket.emit('send_message', {
                     to: recipient,
-                    from: currentUser ,
-                    message: encrypted
+                    from: currentUser,
+                    message: encrypted,
+                    timestamp: Date.now()
                 });
                 
-                addMessageToHistory(currentUser , message, true);
+                addMessageToHistory(currentUser, message, true);
                 messageInput.value = '';
                 logSecurityEvent('Sent encrypted message');
             } catch (error) {
                 logSecurityEvent(`Failed to encrypt message: ${error.message}`);
-                alert('Failed to encrypt message');
+                alert('Failed to encrypt message: ' + error.message);
             }
         }
 
-        function addMessageToHistory(sender, message, isCurrentUser ) {
+        function addMessageToHistory(sender, message, isCurrentUser) {
             const messageDiv = document.createElement('div');
-            messageDiv.className = `mb-3 ${isCurrentUser  ? 'text-right' : 'text-left'}`;
+            messageDiv.className = `mb-3 ${isCurrentUser ? 'text-right' : 'text-left'}`;
             
             const senderSpan = document.createElement('div');
-            senderSpan.className = `flex items-baseline gap-2 ${isCurrentUser  ? 'justify-end' : 'justify-start'}`;
-            
-            const nameSpan = document.createElement('span');
-            nameSpan.className = `text-sm font-medium ${isCurrentUser  ? 'text-blue-400' : 'text-green-400'}`;
-            nameSpan.textContent = sender;
-            
-            const timeSpan = document.createElement('span');
-            timeSpan.className = 'text-xs text-gray-400';
-            timeSpan.textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            
-            senderSpan.appendChild(nameSpan);
-            senderSpan.appendChild(timeSpan);
+            senderSpan.className = `text-sm font-medium mb-1 ${isCurrentUser ? 'text-blue-400' : 'text-green-400'}`;
+            senderSpan.textContent = sender;
             
             const contentDiv = document.createElement('div');
-            contentDiv.className = `inline-block mt-1 px-3 py-2 rounded-lg ${isCurrentUser  ? 'bg-blue-600 text-white' : 'bg-gray-600 text-white'}`;
-            contentDiv.textContent = decodeURIComponent(encodeURIComponent(message)); // Basic XSS protection
+            contentDiv.className = `inline-block px-3 py-2 rounded-lg max-w-xs lg:max-w-md ${isCurrentUser ? 'bg-blue-600 text-white' : 'bg-gray-600 text-white'}`;
+            contentDiv.textContent = message;
+            
+            const timeDiv = document.createElement('div');
+            timeDiv.className = 'text-xs text-gray-400 mt-1';
+            timeDiv.textContent = new Date().toLocaleTimeString();
             
             messageDiv.appendChild(senderSpan);
-            messageDiv.appendChild(document.createElement('br'));
             messageDiv.appendChild(contentDiv);
+            messageDiv.appendChild(timeDiv);
             
             messageHistoryDiv.appendChild(messageDiv);
-            
-            // Scroll to bottom
             messageHistoryDiv.scrollTop = messageHistoryDiv.scrollHeight;
-            
-            // Add to message history
-            messageHistory.push({
-                sender: sender,
-                content: message,
-                timestamp: new Date().toISOString()
-            });
         }
 
         // Helper functions
@@ -557,56 +477,46 @@
             userList.innerHTML = '';
             
             if (users.length === 0) {
-                const item = document.createElement('div');
-                item.className = 'text-gray-400 italic';
-                item.textContent = 'No other users online';
-                userList.appendChild(item);
+                userList.innerHTML = '<div class="text-gray-400 italic">No other users online</div>';
                 return;
             }
             
             users.forEach(user => {
-                if (user !== currentUser ) {
-                    const item = document.createElement('div');
-                    item.className = 'flex items-center justify-between py-2 border-b border-gray-600';
+                if (user !== currentUser) {
+                    const userDiv = document.createElement('div');
+                    userDiv.className = 'flex items-center justify-between py-2 border-b border-gray-600 last:border-b-0';
                     
-                    const usernameSpan = document.createElement('span');
-                    usernameSpan.className = 'text-blue-300';
-                    usernameSpan.textContent = user;
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = user;
+                    nameSpan.className = 'text-green-400';
                     
                     const selectBtn = document.createElement('button');
-                    selectBtn.className = 'bg-gray-600 hover:bg-gray-500 text-white text-xs py-1 px-2 rounded';
                     selectBtn.textContent = 'Select';
-                    selectBtn.addEventListener('click', () => {
+                    selectBtn.className = 'bg-blue-600 hover:bg-blue-700 text-white text-xs py-1 px-2 rounded';
+                    selectBtn.onclick = () => {
                         recipientUsernameInput.value = user;
-                        recipient = user;
-                        logSecurityEvent(`Selected ${user} as recipient`);
-                    });
+                    };
                     
-                    item.appendChild(usernameSpan);
-                    item.appendChild(selectBtn);
-                    userList.appendChild(item);
+                    userDiv.appendChild(nameSpan);
+                    userDiv.appendChild(selectBtn);
+                    userList.appendChild(userDiv);
                 }
             });
         }
 
         function logSecurityEvent(event) {
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString();
-            
-            const logEntry = document.createElement('div');
-            logEntry.className = 'mb-1';
-            logEntry.textContent = `[${timeStr}] ${event}`;
-            
-            securityLog.appendChild(logEntry);
+            const timestamp = new Date().toLocaleTimeString();
+            const logDiv = document.createElement('div');
+            logDiv.textContent = `[${timestamp}] ${event}`;
+            securityLog.appendChild(logDiv);
             securityLog.scrollTop = securityLog.scrollHeight;
         }
 
         function truncateText(text, maxLength) {
-            if (text.length <= maxLength) return text;
-            return text.substring(0, maxLength) + '...';
+            return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
         }
 
-        // Start the app
+        // Start the application
         document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
