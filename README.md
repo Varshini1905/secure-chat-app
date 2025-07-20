@@ -31,6 +31,12 @@ SecureChat is a web-based messaging application that provides end-to-end encrypt
 git clone (https://github.com/Varshini1905/secure-chat-app/edit/main)
 cd secure_chat_app
 ```
+directory structure:
+- secure_chat_app/
+- ├── app.py
+- └── templates/
+    - └── index.html
+
 ## Running the Application
 
 To start the Flask server, run the following command:
@@ -45,4 +51,8 @@ python app.py
 3. Log in with your credentials.
 4. Once logged in, you can request public keys from other users and send encrypted messages.
 ![image](https://github.com/user-attachments/assets/4ccbe0e8-3ed6-45fa-8706-fabcd6307240)
+```
+```
+ <img width="876" height="851" alt="image" src="https://github.com/user-attachments/assets/463a7f89-9cd9-48cd-bfbe-db72323416e7" />
+
 
